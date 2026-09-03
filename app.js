@@ -17,6 +17,71 @@
     return (10 - (sum % 10)) % 10 === check;
   }
 
+  const EAN_LEFT_ODD = ["0001101", "0011001", "0010011", "0111101", "0100011", "0110001", "0101111", "0111011", "0110111", "0001011"];
+  const EAN_LEFT_EVEN = ["0100111", "0110011", "0011011", "0100001", "0011101", "0111001", "0000101", "0010001", "0001001", "0010111"];
+  const EAN_RIGHT = ["1110010", "1100110", "1101100", "1000010", "1011100", "1001110", "1010000", "1000100", "1001000", "1110100"];
+  const EAN13_PARITY = ["OOOOOO", "OOEOEE", "OOEEOE", "OOEEEO", "OEOOEE", "OEEOOE", "OEEEOO", "OEOEOE", "OEOEEO", "OEEOEO"];
+
+  function decodeModules(bits) {
+    if (!/^[01]+$/.test(bits) || !bits.startsWith("101") || !bits.endsWith("101")) return null;
+    const digitFor = (part, patterns) => {
+      const index = patterns.indexOf(part);
+      return index < 0 ? null : String(index);
+    };
+    let jan = "";
+    if (bits.length === 67 && bits.slice(31, 36) === "01010") {
+      for (let offset = 3; offset < 31; offset += 7) jan += digitFor(bits.slice(offset, offset + 7), EAN_LEFT_ODD) ?? "?";
+      for (let offset = 36; offset < 64; offset += 7) jan += digitFor(bits.slice(offset, offset + 7), EAN_RIGHT) ?? "?";
+    } else if (bits.length === 95 && bits.slice(45, 50) === "01010") {
+      let parity = "";
+      let tail = "";
+      for (let offset = 3; offset < 45; offset += 7) {
+        const part = bits.slice(offset, offset + 7);
+        const odd = digitFor(part, EAN_LEFT_ODD);
+        const even = digitFor(part, EAN_LEFT_EVEN);
+        parity += odd !== null ? "O" : "E";
+        tail += odd ?? even ?? "?";
+      }
+      const first = EAN13_PARITY.indexOf(parity);
+      if (first < 0) return null;
+      jan = String(first) + tail;
+      for (let offset = 50; offset < 92; offset += 7) jan += digitFor(bits.slice(offset, offset + 7), EAN_RIGHT) ?? "?";
+    } else return null;
+    return isValidJan(jan) ? jan : null;
+  }
+
+  // Decode an EAN/JAN scan line without a browser API. This is the free Safari fallback.
+  function decodeEanLine(pixels) {
+    const tryDirection = (line) => {
+      const runs = [];
+      let color = line[0];
+      let start = 0;
+      for (let index = 1; index <= line.length; index += 1) {
+        if (index === line.length || line[index] !== color) {
+          runs.push({ color, start, length: index - start });
+          color = line[index];
+          start = index;
+        }
+      }
+      for (const [modules, runCount] of [[95, 59], [67, 43]]) {
+        for (let first = 0; first + runCount <= runs.length; first += 1) {
+          if (runs[first].color !== 1) continue;
+          const candidate = runs.slice(first, first + runCount);
+          const width = candidate.reduce((sum, run) => sum + run.length, 0);
+          const unit = width / modules;
+          if (unit < 1.2 || candidate.some((run) => run.length / unit < 0.38 || run.length / unit > 4.7)) continue;
+          const left = candidate[0].start;
+          let bits = "";
+          for (let module = 0; module < modules; module += 1) bits += String(line[Math.min(line.length - 1, Math.floor(left + (module + 0.5) * unit))]);
+          const result = decodeModules(bits);
+          if (result) return result;
+        }
+      }
+      return null;
+    };
+    return tryDirection(pixels) || tryDirection([...pixels].reverse());
+  }
+
   function parseLocalDate(dateString) {
     const [year, month, day] = dateString.split("-").map(Number);
     return new Date(year, month - 1, day);
@@ -40,7 +105,7 @@
   }
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { parseLocalDate, daysUntil, getStatus, sortProducts, normalizeJan, isValidJan };
+    module.exports = { parseLocalDate, daysUntil, getStatus, sortProducts, normalizeJan, isValidJan, decodeModules, decodeEanLine };
   }
 
   if (typeof document === "undefined") return;
@@ -58,6 +123,7 @@
   const scannerDialog = document.querySelector("#scanner-dialog");
   const scannerMessage = document.querySelector("#scanner-message");
   const cameraPreview = document.querySelector("#camera-preview");
+  const scanCanvas = document.querySelector("#scan-canvas");
   let products = loadProducts();
   let catalog = loadCatalog();
   let cameraStream = null;
@@ -137,29 +203,51 @@
   }
 
   async function startScanner() {
-    if (!("BarcodeDetector" in window)) {
-      message.textContent = "このブラウザーはカメラ読み取りに未対応です。JANコードを数字で入力してください。";
-      janInput.focus();
-      return;
-    }
     scannerDialog.showModal();
     scannerMessage.textContent = "カメラを準備しています…";
     try {
       cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
       cameraPreview.srcObject = cameraStream;
       await cameraPreview.play();
-      const supported = await window.BarcodeDetector.getSupportedFormats();
-      const formats = ["ean_13", "ean_8"].filter((format) => supported.includes(format));
-      if (!formats.length) throw new Error("JAN形式に対応していません");
-      const detector = new window.BarcodeDetector({ formats });
+      let detector = null;
+      if ("BarcodeDetector" in window) {
+        try {
+          const supported = await window.BarcodeDetector.getSupportedFormats();
+          const formats = ["ean_13", "ean_8"].filter((format) => supported.includes(format));
+          if (formats.length) detector = new window.BarcodeDetector({ formats });
+        } catch {
+          detector = null;
+        }
+      }
       scannerMessage.textContent = "バーコード全体を明るい場所で枠内に映してください。";
       let detecting = false;
       scanTimer = window.setInterval(async () => {
         if (detecting || cameraPreview.readyState < 2) return;
         detecting = true;
         try {
-          const codes = await detector.detect(cameraPreview);
-          const jan = codes.map((code) => normalizeJan(code.rawValue)).find(isValidJan);
+          let jan = null;
+          if (detector) {
+            const codes = await detector.detect(cameraPreview);
+            jan = codes.map((code) => normalizeJan(code.rawValue)).find(isValidJan);
+          } else {
+            const width = 960;
+            const height = Math.round(width * cameraPreview.videoHeight / cameraPreview.videoWidth);
+            scanCanvas.width = width;
+            scanCanvas.height = height;
+            const context = scanCanvas.getContext("2d", { willReadFrequently: true });
+            context.drawImage(cameraPreview, 0, 0, width, height);
+            for (const ratio of [0.42, 0.5, 0.58]) {
+              const data = context.getImageData(0, Math.floor(height * ratio), width, 1).data;
+              const light = Array.from({ length: width }, (_, x) => (data[x * 4] * 299 + data[x * 4 + 1] * 587 + data[x * 4 + 2] * 114) / 1000);
+              const min = Math.min(...light);
+              const max = Math.max(...light);
+              for (const fraction of [0.42, 0.5, 0.58]) {
+                jan = decodeEanLine(light.map((value) => value < min + (max - min) * fraction ? 1 : 0));
+                if (jan) break;
+              }
+              if (jan) break;
+            }
+          }
           if (jan) { stopScanner(); applyJan(jan, true); }
         } catch { scannerMessage.textContent = "読み取り中です。カメラをゆっくり動かしてください。"; }
         finally { detecting = false; }

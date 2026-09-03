@@ -39,6 +39,14 @@
           <div><h2 id="form-title">商品を登録</h2><p>確認したい商品を追加します</p></div>
         </div>
         <form id="product-form">
+          <div class="jan-field">
+            <label for="jan-code">JANコード <span class="optional">（8桁または13桁）</span></label>
+            <div class="jan-controls">
+              <input id="jan-code" name="jan" type="text" inputmode="numeric" autocomplete="off" placeholder="例：4901234567894" maxlength="13" aria-describedby="jan-help" />
+              <button id="scan-button" class="scan-button" type="button">▣ カメラで読む</button>
+            </div>
+            <p id="jan-help" class="field-help">読み取れない場合は数字を入力できます。JANなしでも登録できます。</p>
+          </div>
           <label>商品名<input id="product-name" name="name" type="text" placeholder="例：牛乳" maxlength="60" required /></label>
           <label>賞味期限<input id="expiry-date" name="expiry" type="date" required /></label>
           <button class="primary-button" type="submit">商品を登録 <span aria-hidden="true">→</span></button>
@@ -63,12 +71,23 @@
       </section>
     </main>
 
+    <dialog id="scanner-dialog" aria-labelledby="scanner-title">
+      <div class="scanner-heading">
+        <div><p class="eyebrow">バーコード読み取り</p><h2 id="scanner-title">JANコードを枠内に合わせる</h2></div>
+        <button id="close-scanner" class="close-button" type="button" aria-label="カメラを閉じる">×</button>
+      </div>
+      <div class="camera-frame"><video id="camera-preview" playsinline muted></video><div class="scan-guide" aria-hidden="true"></div></div>
+      <p id="scanner-message" class="scanner-message" role="status" aria-live="polite">カメラを準備しています…</p>
+      <button id="cancel-scanner" class="secondary-button" type="button">キャンセル</button>
+    </dialog>
+
     <template id="product-template">
       <article class="card product-card">
         <div class="status-stripe"></div>
         <div class="product-info">
           <div class="product-top"><h3></h3><span class="status-badge"></span></div>
           <p class="expiry"></p>
+          <p class="jan-display" hidden></p>
         </div>
         <div class="actions">
           <button class="check-button" type="button">✓ 確認済みにする</button>

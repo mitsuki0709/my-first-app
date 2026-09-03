@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { daysUntil, getStatus, sortProducts } = require("../app.js");
+const { daysUntil, getStatus, sortProducts, normalizeJan, isValidJan } = require("../app.js");
 
 const today = new Date(2026, 8, 2, 15, 30);
 
@@ -8,6 +8,17 @@ test("期限までの日数を日付単位で計算する", () => {
   assert.equal(daysUntil("2026-09-02", today), 0);
   assert.equal(daysUntil("2026-09-05", today), 3);
   assert.equal(daysUntil("2026-09-01", today), -1);
+});
+
+test("JANコードは数字だけに整形し、13桁までにする", () => {
+  assert.equal(normalizeJan("49 0123-4567894"), "4901234567894");
+});
+
+test("JANコードの桁数とチェックデジットを検証する", () => {
+  assert.equal(isValidJan("4901234567894"), true);
+  assert.equal(isValidJan("12345670"), true);
+  assert.equal(isValidJan("4901234567890"), false);
+  assert.equal(isValidJan("1234"), false);
 });
 
 test("期限を4段階に分類する", () => {

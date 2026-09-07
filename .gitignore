@@ -1,0 +1,25 @@
+# Local configuration and credentials
+.env
+.env.*
+.npmrc
+credentials
+credentials.*
+secrets/
+secrets.*
+*.pem
+*.key
+service-account*.json
+service_account*.json
+client_secret*.json
+
+# Dependencies and generated files
+node_modules/
+dist/
+coverage/
+.cache/
+*.log
+*.tmp
+__pycache__/
+
+# macOS
+.DS_Store

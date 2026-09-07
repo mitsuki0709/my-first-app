@@ -73,13 +73,76 @@
           const left = candidate[0].start;
           let bits = "";
           for (let module = 0; module < modules; module += 1) bits += String(line[Math.min(line.length - 1, Math.floor(left + (module + 0.5) * unit))]);
-          const result = decodeModules(bits);
+          const normalized = candidate.map((run) => String(run.color).repeat(Math.max(1, Math.min(4, Math.round(run.length / unit))))).join("");
+          const result = decodeModules(bits) || decodeModules(normalized);
           if (result) return result;
         }
       }
       return null;
     };
     return tryDirection(pixels) || tryDirection([...pixels].reverse());
+  }
+
+  // Match the centered object-fit: cover preview and include margin around the guide.
+  function scannerCrop(videoWidth, videoHeight, viewWidth, viewHeight) {
+    const scale = Math.max(viewWidth / videoWidth, viewHeight / videoHeight);
+    const visibleWidth = viewWidth / scale;
+    const visibleHeight = viewHeight / scale;
+    return {
+      x: (videoWidth - visibleWidth) / 2 + visibleWidth * 0.02,
+      y: (videoHeight - visibleHeight) / 2 + visibleHeight * 0.24,
+      width: visibleWidth * 0.96,
+      height: visibleHeight * 0.52,
+    };
+  }
+
+  // One generator step analyses one position/angle. The UI yields between short batches.
+  function* scanBarcodeImage(image, decode = decodeEanLine) {
+    const { width, height, data } = image;
+    const positions = [0.5];
+    for (let i = 1; i <= 10; i += 1) positions.push(0.5 - i * 0.04, 0.5 + i * 0.04);
+    for (const slope of [0, -0.08, 0.08, -0.16, 0.16]) {
+      for (const position of positions) {
+        const center = position * (height - 1);
+        if (center - Math.abs(slope) * width / 2 < 2 || center + Math.abs(slope) * width / 2 >= height - 2) continue;
+        for (const radius of [1, 0]) {
+          const light = new Float32Array(width);
+          const histogram = new Uint32Array(256);
+          for (let x = 0; x < width; x += 1) {
+            const y = Math.round(center + (x - width / 2) * slope);
+            let sum = 0;
+            for (let dy = -radius; dy <= radius; dy += 1) {
+              const offset = ((y + dy) * width + x) * 4;
+              sum += (data[offset] * 299 + data[offset + 1] * 587 + data[offset + 2] * 114) / 1000;
+            }
+            light[x] = sum / (radius * 2 + 1);
+            histogram[Math.round(light[x])] += 1;
+          }
+          let cumulative = 0, low = -1, high = 255;
+          for (let value = 0; value < 256; value += 1) {
+            cumulative += histogram[value];
+            if (low < 0 && cumulative >= width * 0.05) low = value;
+            if (cumulative >= width * 0.95) { high = value; break; }
+          }
+          if (high - low < 25) continue;
+          const prefix = new Float64Array(width + 1);
+          for (let x = 0; x < width; x += 1) prefix[x + 1] = prefix[x] + light[x];
+          const windowSize = Math.max(16, Math.round(width / 16));
+          for (const fraction of [0.5, 0.38, 0.62, null]) {
+            const bits = new Uint8Array(width);
+            for (let x = 0; x < width; x += 1) {
+              const left = Math.max(0, x - windowSize), right = Math.min(width, x + windowSize + 1);
+              const threshold = fraction === null ? (prefix[right] - prefix[left]) / (right - left) - 5 : low + (high - low) * fraction;
+              bits[x] = light[x] < threshold ? 1 : 0;
+            }
+            const jan = decode(bits);
+            if (jan) return jan;
+          }
+        }
+        yield null;
+      }
+    }
+    return null;
   }
 
   function parseLocalDate(dateString) {
@@ -146,7 +209,7 @@
   }
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { parseLocalDate, daysUntil, getStatus, sortProducts, normalizeJan, isValidJan, decodeModules, decodeEanLine, editProduct, persistEdit };
+    module.exports = { parseLocalDate, daysUntil, getStatus, sortProducts, normalizeJan, isValidJan, decodeModules, decodeEanLine, editProduct, persistEdit, scannerCrop, scanBarcodeImage };
   }
 
   if (typeof document === "undefined") return;
@@ -177,6 +240,7 @@
   let catalog = loadCatalog();
   let cameraStream = null;
   let scanTimer = null;
+  let scannerSession = 0;
 
   function loadCatalog() {
     try {
@@ -286,7 +350,8 @@
   }
 
   function stopScanner() {
-    if (scanTimer) window.clearInterval(scanTimer);
+    scannerSession += 1;
+    if (scanTimer) window.clearTimeout(scanTimer);
     scanTimer = null;
     if (cameraStream) cameraStream.getTracks().forEach((track) => track.stop());
     cameraStream = null;
@@ -295,56 +360,93 @@
   }
 
   async function startScanner() {
+    if (scannerDialog.open) return;
+    const session = ++scannerSession;
     scannerDialog.showModal();
     scannerMessage.textContent = "カメラを準備しています…";
+    const active = () => session === scannerSession && scannerDialog.open;
     try {
-      cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
-      cameraPreview.srcObject = cameraStream;
+      const stream = await navigator.mediaDevices.getUserMedia({ video: {
+        facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 24, max: 30 },
+      }, audio: false });
+      if (!active()) { stream.getTracks().forEach((track) => track.stop()); return; }
+      cameraStream = stream;
+      cameraPreview.srcObject = stream;
       await cameraPreview.play();
+      if (!active()) return;
+      const track = stream.getVideoTracks()[0];
+      try {
+        const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+        const advanced = {};
+        for (const key of ["focusMode", "exposureMode", "whiteBalanceMode"]) {
+          if (capabilities[key] && capabilities[key].includes("continuous")) advanced[key] = "continuous";
+        }
+        if (Object.keys(advanced).length) await track.applyConstraints({ advanced: [advanced] });
+      } catch { /* Optional camera controls must never block scanning. */ }
+      if (!active()) return;
       let detector = null;
       if ("BarcodeDetector" in window) {
         try {
           const supported = await window.BarcodeDetector.getSupportedFormats();
           const formats = ["ean_13", "ean_8"].filter((format) => supported.includes(format));
           if (formats.length) detector = new window.BarcodeDetector({ formats });
-        } catch {
-          detector = null;
-        }
+        } catch { detector = null; }
       }
-      scannerMessage.textContent = "バーコード全体を明るい場所で枠内に映してください。";
-      let detecting = false;
-      scanTimer = window.setInterval(async () => {
-        if (detecting || cameraPreview.readyState < 2) return;
-        detecting = true;
+      if (!active()) return;
+      scannerMessage.textContent = "左右の白い余白ごと緑枠に入れ、1〜2秒静止してください。ピントが合わなければ少し離してください。";
+      const context = scanCanvas.getContext("2d", { willReadFrequently: true });
+      let iterator = null, lastJan = null, lastSeen = 0;
+      const started = Date.now();
+      async function scan() {
+        if (!active()) return;
+        let jan = null;
         try {
-          let jan = null;
+          if (cameraPreview.readyState < 2 || !cameraPreview.videoWidth) return;
           if (detector) {
-            const codes = await detector.detect(cameraPreview);
-            jan = codes.map((code) => normalizeJan(code.rawValue)).find(isValidJan);
-          } else {
-            const width = 960;
-            const height = Math.round(width * cameraPreview.videoHeight / cameraPreview.videoWidth);
-            scanCanvas.width = width;
-            scanCanvas.height = height;
-            const context = scanCanvas.getContext("2d", { willReadFrequently: true });
-            context.drawImage(cameraPreview, 0, 0, width, height);
-            for (const ratio of [0.42, 0.5, 0.58]) {
-              const data = context.getImageData(0, Math.floor(height * ratio), width, 1).data;
-              const light = Array.from({ length: width }, (_, x) => (data[x * 4] * 299 + data[x * 4 + 1] * 587 + data[x * 4 + 2] * 114) / 1000);
-              const min = Math.min(...light);
-              const max = Math.max(...light);
-              for (const fraction of [0.42, 0.5, 0.58]) {
-                jan = decodeEanLine(light.map((value) => value < min + (max - min) * fraction ? 1 : 0));
-                if (jan) break;
-              }
-              if (jan) break;
+            try {
+              const codes = await detector.detect(cameraPreview);
+              if (!active()) return;
+              jan = codes.map((code) => normalizeJan(code.rawValue)).find(isValidJan);
+            } catch { detector = null; }
+          }
+          if (!detector) {
+            if (!iterator) {
+              const bounds = cameraPreview.getBoundingClientRect();
+              const crop = scannerCrop(cameraPreview.videoWidth, cameraPreview.videoHeight, bounds.width, bounds.height);
+              const width = Math.min(1280, Math.round(crop.width));
+              const height = Math.max(1, Math.round(width * crop.height / crop.width));
+              if (scanCanvas.width !== width) scanCanvas.width = width;
+              if (scanCanvas.height !== height) scanCanvas.height = height;
+              context.drawImage(cameraPreview, crop.x, crop.y, crop.width, crop.height, 0, 0, width, height);
+              iterator = scanBarcodeImage(context.getImageData(0, 0, width, height));
+            }
+            const deadline = performance.now() + 18;
+            for (let batch = 0; batch < 4; batch += 1) {
+              const result = iterator.next();
+              if (result.done) { jan = result.value; iterator = null; break; }
+              if (performance.now() >= deadline) break;
             }
           }
-          if (jan) { stopScanner(); applyJan(jan, true); }
-        } catch { scannerMessage.textContent = "読み取り中です。カメラをゆっくり動かしてください。"; }
-        finally { detecting = false; }
-      }, 350);
+          if (jan) {
+            const now = Date.now();
+            // Require the same checksum-valid JAN in two separately captured frames.
+            if (jan === lastJan && now - lastSeen < 2500) { stopScanner(); applyJan(jan, true); return; }
+            lastJan = jan;
+            lastSeen = now;
+            scannerMessage.textContent = "読み取り候補を確認中です。そのまま少し静止してください。";
+          } else if (Date.now() - started > 6000 && Date.now() - lastSeen > 2500) {
+            scannerMessage.textContent = "反射を避け、バーを横向きにして少し近づける・離すと読みやすくなります。難しい場合はキャンセルして数字で入力できます。";
+          }
+        } catch {
+          iterator = null;
+          scannerMessage.textContent = "ピントと反射を確認してください。読み取りを続けています。";
+        } finally {
+          if (active()) scanTimer = window.setTimeout(scan, iterator ? 16 : 140);
+        }
+      }
+      scanTimer = window.setTimeout(scan, 140);
     } catch (error) {
+      if (!active()) return;
       stopScanner();
       message.textContent = "カメラを開始できませんでした。権限とHTTPS接続を確認するか、数字で入力してください。";
       janInput.focus();

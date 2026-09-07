@@ -135,14 +135,14 @@ for (const failAt of [1, 2]) {
 }
 
 // Run the real event handlers with an in-memory DOM/storage; no browser data is used.
-function mountApp(storage = memoryStorage()) {
+function mountApp(storage = memoryStorage(), options = {}) {
   const fs = require('node:fs');
   const vm = require('node:vm');
   const html = fs.readFileSync(require.resolve('../index.html'), 'utf8');
   class Element {
     constructor() { this.handlers = {}; this.children = []; this.parts = {}; this.dataset = {}; this.value = ''; this.isConnected = true; this.classList = { add() {} }; }
     addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
-    emit(type) { for (const handler of this.handlers[type] || []) handler({ preventDefault() {} }); }
+    emit(type) { return Promise.all((this.handlers[type] || []).map(handler => handler({ preventDefault() {} }))); }
     setAttribute() {}
     focus() {}
     reset() {}
@@ -153,13 +153,16 @@ function mountApp(storage = memoryStorage()) {
     querySelector(selector) { return this.parts[selector] ||= new Element(); }
     querySelectorAll(selector) { return this.children.map(child => child.querySelector(selector)); }
     cloneNode() { return new Element(); }
+    async play() {}
+    getContext() { return options.context || {}; }
+    getBoundingClientRect() { return { width: 400, height: 300 }; }
   }
   const elements = {};
   for (const match of html.matchAll(/id="([^"]+)"/g)) elements['#' + match[1]] = new Element();
   elements['#product-template'].content = { firstElementChild: new Element() };
   const document = { querySelector(selector) { assert.ok(elements[selector], `HTML contains ${selector}`); return elements[selector]; } };
-  const window = { confirm: () => true, setTimeout() {} };
-  vm.runInNewContext(fs.readFileSync(require.resolve('../app.js'), 'utf8'), { document, window, localStorage: storage });
+  const window = { confirm: () => true, setTimeout() {}, ...options.window };
+  vm.runInNewContext(fs.readFileSync(require.resolve('../app.js'), 'utf8'), { document, window, localStorage: storage, navigator: options.navigator, performance });
   return { elements, storage, card: () => elements['#product-list'].children[0] };
 }
 
@@ -220,4 +223,126 @@ test('編集後も確認済み切替・登録・削除のイベントが動作�
   assert.equal(JSON.parse(storage.getItem('expiry-watcher-products')).length, 2);
   card().querySelector('.delete-button').emit('click');
   assert.equal(JSON.parse(storage.getItem('expiry-watcher-products')).length, 1);
+});
+
+const { scannerCrop, scanBarcodeImage } = require('../app.js');
+const jan13Bits = '10100010110100111001100100100110100001001110101010100111010100001000100100100011101001011100101';
+const jan8Bits = '1010011001001001101111010100011010101001110101000010001001110010101';
+function barcodeImage(bits, options = {}) {
+  const { scale = 3, left = 110, center = 180, slope = 0, noise = 0, reverse = false, gradient = false } = options;
+  const width = 640, height = 360;
+  const data = new Uint8ClampedArray(width * height * 4);
+  let seed = 12345;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = Math.floor((x - left) / scale);
+      const digit = reverse ? bits[bits.length - 1 - index] : bits[index];
+      const inBars = Math.abs(y - center - slope * (x - width / 2)) < 13;
+      let value = inBars && index >= 0 && index < bits.length && digit === '1' ? 40 : 220;
+      if (gradient) value = value * (0.4 + 0.6 * x / width);
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      value += ((seed / 4294967296) * 2 - 1) * noise;
+      const offset = (y * width + x) * 4;
+      data[offset] = data[offset + 1] = data[offset + 2] = value;
+      data[offset + 3] = 255;
+    }
+  }
+  return { width, height, data };
+}
+function decodeImage(image) {
+  const iterator = scanBarcodeImage(image);
+  for (let calls = 0; calls <= 105; calls += 1) {
+    const result = iterator.next();
+    if (result.done) return result.value;
+  }
+  assert.fail('Scanner exceeded bounded search count');
+}
+for (const [label, options] of [
+  ['中央', {}], ['上方・左への位置ずれ', { center: 85, left: 35 }],
+  ['下方・右への位置ずれ', { center: 280, left: 300, scale: 2 }],
+  ['縮小・非整数倍率', { scale: 1.8 }], ['拡大', { scale: 4.5, left: 50 }],
+  ['逆向き', { reverse: true }], ['画素ノイズ', { noise: 65 }],
+  ['右上がり', { slope: -0.16 }], ['右下がり', { slope: 0.16 }],
+  ['傾き・ノイズ・位置ずれ', { slope: 0.08, center: 130, noise: 50 }],
+  ['明るさのむら', { gradient: true }],
+]) {
+  for (const [jan, bits] of [[oldJan, jan13Bits], [newJan, jan8Bits]]) {
+    test(`画像解析 ${jan.length}桁: ${label}`, () => assert.equal(decodeImage(barcodeImage(bits, options)), jan));
+  }
+}
+test('白紙画像・チェックディジット不正では読み取りを確定しない', () => {
+  const blank = barcodeImage('');
+  assert.equal(decodeImage(blank), null);
+  const invalid = jan13Bits.slice(0, -10) + '1110010' + '101';
+  assert.equal(decodeImage(barcodeImage(invalid)), null);
+});
+test('縦長カメラと横長カメラの表示切り抜きに解析領域を合わせる', () => {
+  for (const [width, height] of [[1920, 1080], [1080, 1920]]) {
+    const crop = scannerCrop(width, height, 400, 300);
+    assert.ok(crop.x >= 0 && crop.y >= 0);
+    assert.ok(crop.x + crop.width <= width && crop.y + crop.height <= height);
+    assert.ok(Math.abs(crop.x + crop.width / 2 - width / 2) < 0.01);
+    assert.ok(Math.abs(crop.y + crop.height / 2 - height / 2) < 0.01);
+    assert.ok(Math.abs(crop.width / crop.height - (400 * 0.96) / (300 * 0.52)) < 0.01);
+  }
+});
+
+test('BarcodeDetectorはJANを2フレーム確認して入力しカメラを停止する', async () => {
+  const tasks = [];
+  let stopped = 0, detected = 0, constraints;
+  const track = { stop() { stopped += 1; }, getCapabilities: () => ({ focusMode: ['continuous'] }), async applyConstraints() { throw new Error('optional control unavailable'); } };
+  const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
+  class Detector {
+    static async getSupportedFormats() { return ['ean_13', 'ean_8']; }
+    async detect() { detected += 1; return [{ rawValue: oldJan }]; }
+  }
+  const { elements: e } = mountApp(memoryStorage(), {
+    navigator: { mediaDevices: { async getUserMedia(value) { constraints = value; return stream; } } },
+    window: { BarcodeDetector: Detector, setTimeout(fn) { tasks.push(fn); return tasks.length; }, clearTimeout() {} },
+  });
+  e['#camera-preview'].readyState = 2;
+  e['#camera-preview'].videoWidth = 1920;
+  await e['#scan-button'].emit('click');
+  assert.equal(constraints.audio, false);
+  assert.equal(constraints.video.width.ideal, 1920);
+  await tasks.shift()();
+  assert.equal(e['#scanner-dialog'].open, true);
+  await tasks.shift()();
+  assert.equal(detected, 2);
+  assert.equal(e['#jan-code'].value, oldJan);
+  assert.equal(e['#scanner-dialog'].open, false);
+  assert.equal(stopped, 1);
+});
+
+test('カメラ許可待ちのキャンセルでは、後から届いた映像を停止する', async () => {
+  let resolve, stopped = 0;
+  const { elements: e } = mountApp(memoryStorage(), {
+    navigator: { mediaDevices: { getUserMedia: () => new Promise(done => { resolve = done; }) } },
+    window: { clearTimeout() {} },
+  });
+  const pending = e['#scan-button'].emit('click');
+  await e['#cancel-scanner'].emit('click');
+  resolve({ getTracks: () => [{ stop() { stopped += 1; } }] });
+  await pending;
+  assert.equal(stopped, 1);
+  assert.equal(e['#scanner-dialog'].open, false);
+  assert.equal(e['#camera-preview'].srcObject, null);
+});
+
+test('Safari経路も画像を端末内で解析し、別フレームの一致で確定する', async () => {
+  const tasks = [];
+  let captures = 0, stopped = 0;
+  const track = { stop() { stopped += 1; } };
+  const image = barcodeImage(jan8Bits);
+  const { elements: e } = mountApp(memoryStorage(), {
+    navigator: { mediaDevices: { async getUserMedia() { return { getTracks: () => [track], getVideoTracks: () => [track] }; } } },
+    context: { drawImage() { captures += 1; }, getImageData() { return image; } },
+    window: { setTimeout(fn) { tasks.push(fn); return tasks.length; }, clearTimeout() {} },
+  });
+  Object.assign(e['#camera-preview'], { readyState: 2, videoWidth: 1920, videoHeight: 1080 });
+  await e['#scan-button'].emit('click');
+  for (let i = 0; i < 100 && e['#scanner-dialog'].open; i += 1) await tasks.shift()();
+  assert.equal(captures, 2);
+  assert.equal(e['#jan-code'].value, newJan);
+  assert.equal(stopped, 1);
 });

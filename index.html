@@ -81,6 +81,21 @@
       <button id="cancel-scanner" class="secondary-button" type="button">キャンセル</button>
     </dialog>
 
+    <dialog id="edit-dialog" aria-labelledby="edit-title">
+      <h2 id="edit-title">商品を編集</h2>
+      <form id="edit-form">
+        <label for="edit-name">商品名<input id="edit-name" name="name" type="text" maxlength="60" required /></label>
+        <label for="edit-expiry">賞味期限<input id="edit-expiry" name="expiry" type="date" required /></label>
+        <label for="edit-jan">JANコード<input id="edit-jan" name="jan" type="text" inputmode="numeric" maxlength="13" autocomplete="off" aria-describedby="edit-jan-help" /></label>
+        <p id="edit-jan-help" class="field-help">JANは8桁または13桁。空欄でも保存できます。商品名は自動で置き換わりません。</p>
+        <p id="edit-message" role="alert" aria-live="polite"></p>
+        <div class="edit-actions">
+          <button class="primary-button" type="submit">保存</button>
+          <button id="cancel-edit" class="secondary-button" type="button">キャンセル</button>
+        </div>
+      </form>
+    </dialog>
+
     <template id="product-template">
       <article class="card product-card">
         <div class="status-stripe"></div>
@@ -90,6 +105,7 @@
           <p class="jan-display" hidden></p>
         </div>
         <div class="actions">
+          <button class="edit-button" type="button">編集</button>
           <button class="check-button" type="button">✓ 確認済みにする</button>
           <button class="delete-button" type="button" aria-label="商品を削除">削除</button>
         </div>

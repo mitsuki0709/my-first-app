@@ -104,8 +104,49 @@
     return [...products].sort((a, b) => a.expiry.localeCompare(b.expiry) || a.name.localeCompare(b.name, "ja"));
   }
 
+  function editProduct(products, catalog, id, values) {
+    const original = products.find((product) => product.id === id);
+    if (!original) throw new Error("商品が見つかりません。編集を閉じて確認してください。");
+    const name = String(values.name || "").trim();
+    const expiry = String(values.expiry || "");
+    const jan = normalizeJan(values.jan);
+    if (!name || name.length > 60) throw new Error("商品名を1〜60文字で入力してください。");
+    const date = parseLocalDate(expiry);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(expiry) || Number.isNaN(date.getTime()) ||
+        date.getFullYear() !== Number(expiry.slice(0, 4)) || date.getMonth() + 1 !== Number(expiry.slice(5, 7)) ||
+        date.getDate() !== Number(expiry.slice(8))) throw new Error("正しい賞味期限を入力してください。");
+    if (jan && !isValidJan(jan)) throw new Error("JANコードを確認してください（正しい8桁または13桁）。");
+    const updated = { ...original, name, expiry, jan };
+    const nextCatalog = { ...catalog };
+    // Retain the old JAN's name only when another registered product uses it.
+    if (original.jan && original.jan !== jan) {
+      const remaining = products.find((product) => product.id !== id && product.jan === original.jan);
+      if (remaining) nextCatalog[original.jan] = remaining.name;
+      else delete nextCatalog[original.jan];
+    }
+    // Date-only edits must not replace a name remembered by another product.
+    if (jan && (original.jan !== jan || original.name !== name)) nextCatalog[jan] = name;
+    return { products: products.map((product) => product.id === id ? updated : product), catalog: nextCatalog };
+  }
+
+  function persistEdit(storage, next) {
+    const previousProducts = storage.getItem(STORAGE_KEY);
+    storage.setItem(STORAGE_KEY, JSON.stringify(next.products));
+    try {
+      storage.setItem(CATALOG_KEY, JSON.stringify(next.catalog));
+    } catch (error) {
+      try {
+        if (previousProducts === null) storage.removeItem(STORAGE_KEY);
+        else storage.setItem(STORAGE_KEY, previousProducts);
+      } catch {
+        throw new Error("保存状態を復元できませんでした。これ以上操作せず、入力内容を控えてください。");
+      }
+      throw error;
+    }
+  }
+
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { parseLocalDate, daysUntil, getStatus, sortProducts, normalizeJan, isValidJan, decodeModules, decodeEanLine };
+    module.exports = { parseLocalDate, daysUntil, getStatus, sortProducts, normalizeJan, isValidJan, decodeModules, decodeEanLine, editProduct, persistEdit };
   }
 
   if (typeof document === "undefined") return;
@@ -124,6 +165,14 @@
   const scannerMessage = document.querySelector("#scanner-message");
   const cameraPreview = document.querySelector("#camera-preview");
   const scanCanvas = document.querySelector("#scan-canvas");
+  const editDialog = document.querySelector("#edit-dialog");
+  const editForm = document.querySelector("#edit-form");
+  const editName = document.querySelector("#edit-name");
+  const editExpiry = document.querySelector("#edit-expiry");
+  const editJan = document.querySelector("#edit-jan");
+  const editMessage = document.querySelector("#edit-message");
+  let editingId = null;
+  let editTrigger = null;
   let products = loadProducts();
   let catalog = loadCatalog();
   let cameraStream = null;
@@ -176,9 +225,52 @@
       checkButton.textContent = product.checked ? "✓ 確認済み" : "✓ 確認済みにする";
       checkButton.addEventListener("click", () => toggleChecked(product.id));
       node.querySelector(".delete-button").addEventListener("click", () => removeProduct(product.id));
+      const editButton = node.querySelector(".edit-button");
+      editButton.dataset.productId = product.id;
+      editButton.setAttribute("aria-label", `${product.name}を編集`);
+      editButton.addEventListener("click", () => {
+        editingId = product.id;
+        editTrigger = editButton;
+        editName.value = product.name;
+        editExpiry.value = product.expiry;
+        editJan.value = product.jan || "";
+        editMessage.textContent = "";
+        editDialog.showModal();
+        editName.focus();
+      });
       list.append(node);
     });
   }
+
+  document.querySelector("#cancel-edit").addEventListener("click", () => editDialog.close());
+  editDialog.addEventListener("close", () => {
+    editingId = null;
+    editForm.reset();
+    if (editTrigger && editTrigger.isConnected) editTrigger.focus();
+  });
+  editForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    let next;
+    try {
+      next = editProduct(products, catalog, editingId, { name: editName.value, expiry: editExpiry.value, jan: editJan.value });
+    } catch (error) {
+      editMessage.textContent = error.message;
+      return;
+    }
+    try {
+      persistEdit(localStorage, next);
+    } catch (error) {
+      editMessage.textContent = error.message.startsWith("保存状態") ? error.message : "保存できませんでした。入力内容は残っています。空き容量やブラウザーの設定を確認して再試行してください。";
+      return;
+    }
+    products = next.products;
+    catalog = next.catalog;
+    const savedId = editingId;
+    render();
+    editTrigger = [...list.querySelectorAll(".edit-button")].find((button) => button.dataset.productId === savedId);
+    editDialog.close();
+    message.textContent = "商品を編集して保存しました。";
+  });
 
   function applyJan(rawValue, announce = false) {
     const jan = normalizeJan(rawValue);

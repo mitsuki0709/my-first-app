@@ -50,7 +50,7 @@ test("商品を期限が近い順に並べる", () => {
   assert.deepEqual(sortProducts(products).map((item) => item.name), ["牛乳", "卵", "ヨーグルト"]);
 });
 
-const { editProduct, persistEdit } = require('../app.js');
+const { editProduct, persistProducts, persistEdit } = require('../app.js');
 const oldJan = '4901234567894';
 const newJan = '12345670';
 const sample = () => [{ id: 'a', name: '牛乳', expiry: '2026-09-10', jan: oldJan, checked: true }];
@@ -116,6 +116,13 @@ function memoryStorage(failAt) {
     removeItem: key => map.delete(key),
   };
 }
+
+test('商品一覧を保存し、再読み込み可能なJSONにする', () => {
+  const storage = memoryStorage();
+  const nextProducts = [...sample(), { id: 'b', name: '卵', expiry: '2026-09-20', jan: '', checked: false }];
+  persistProducts(storage, nextProducts);
+  assert.deepEqual(JSON.parse(storage.getItem('expiry-watcher-products')), nextProducts);
+});
 
 test('編集商品と記憶を保存し、再読み込み可能なJSONにする', () => {
   const storage = memoryStorage();
@@ -208,6 +215,43 @@ test('編集イベントの検証エラーと保存失敗では画面・入力�
   assert.equal(e['#edit-name'].value, values.name);
   assert.equal(card().querySelector('h3').textContent, '牛乳');
   assert.deepEqual([...storage.map], before);
+});
+
+test('登録の保存失敗では元データと一覧を維持し、入力を残す', () => {
+  const storage = memoryStorage(2);
+  const { elements: e } = mountApp(storage);
+  const before = [...storage.map];
+  e['#jan-code'].value = newJan;
+  e['#product-name'].value = '追加商品';
+  e['#expiry-date'].value = '2026-10-01';
+  e['#product-form'].emit('submit');
+  assert.match(e['#form-message'].textContent, /保存できません/);
+  assert.deepEqual([...storage.map], before);
+  assert.equal(e['#product-list'].children.length, 1);
+  assert.equal(e['#product-name'].value, '追加商品');
+  assert.equal(e['#expiry-date'].value, '2026-10-01');
+});
+
+test('確認済み切替の保存失敗では表示と元データを変更しない', () => {
+  const storage = memoryStorage(1);
+  const { elements: e, card } = mountApp(storage);
+  const before = [...storage.map];
+  assert.equal(card().querySelector('.check-button').textContent, '✓ 確認済み');
+  card().querySelector('.check-button').emit('click');
+  assert.match(e['#form-message'].textContent, /保存できません/);
+  assert.deepEqual([...storage.map], before);
+  assert.equal(card().querySelector('.check-button').textContent, '✓ 確認済み');
+});
+
+test('削除の保存失敗では商品を一覧と保存データに残す', () => {
+  const storage = memoryStorage(1);
+  const { elements: e, card } = mountApp(storage);
+  const before = [...storage.map];
+  card().querySelector('.delete-button').emit('click');
+  assert.match(e['#form-message'].textContent, /削除を保存できません/);
+  assert.deepEqual([...storage.map], before);
+  assert.equal(e['#product-list'].children.length, 1);
+  assert.equal(card().querySelector('h3').textContent, '牛乳');
 });
 
 test('編集後も確認済み切替・登録・削除のイベントが動作する', () => {

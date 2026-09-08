@@ -18,28 +18,38 @@ Implemented core capabilities include:
 - deletion;
 - camera barcode scanning;
 - fallback in-app JAN decoding for environments such as iPhone Safari where `BarcodeDetector` may not be available;
+- Safari fallback analysis in both horizontal and vertical scan directions so a JAN rotated about 90 degrees can still be decoded;
 - storage-safe core changes: registration, confirmed/unconfirmed changes, and deletion update the in-memory/UI state only after browser storage succeeds; JAN registration rolls product storage back if catalog storage fails;
-- automated tests in `tests/app.test.js`.
+- automated tests in `tests/app.test.js` plus orientation coverage in `tests/scanner-orientation.test.js`.
 
 ## Most recent development work
 
-Core persistence was hardened for practical Ver.1 use. Registration, confirmed/unconfirmed changes, and deletion now avoid showing a successful state when `localStorage` fails. JAN registration also preserves the previous product data if the associated JAN-name catalog cannot be saved.
+A real-device check on iPhone Safari found two barcodes that did not read:
 
-Regression coverage was added for those failure paths. The current baseline suite passes **51/51 tests** with `node --test tests/app.test.js`, including adjacent registration/edit/confirm/delete flows and simulated JAN-8/JAN-13 camera decoding.
+- `4954540122035` — a valid JAN-13 on a curved tube. The supplied photo shows the barcode about 90 degrees from the scanner's previously preferred orientation, with curvature/reflection also present. This is a supported format and is treated as a genuine reliability failure.
+- `(01)04987138801791` — a GS1 barcode carrying a GTIN-14, not a JAN-8/JAN-13 symbol. This remains outside Ver.1 scope and is not treated as a JAN scanner regression.
 
-The previously merged iPhone barcode-scanning implementation remains unchanged by this persistence work.
+To address the supported JAN failure without adding dependencies or external services, the Safari fallback now searches both image axes. Existing horizontal scanning remains first, so normal scans keep the previous fast path; vertical analysis is attempted only if the horizontal search does not decode the frame. Scanner guidance was updated to allow either orientation.
+
+A focused local algorithm check confirmed the two-orientation search decodes the existing synthetic JAN-13 in both normal and 90-degree-rotated layouts. Repository coverage for those two cases was added in `tests/scanner-orientation.test.js`.
+
+Core persistence was previously hardened for practical Ver.1 use. Registration, confirmed/unconfirmed changes, and deletion avoid showing a successful state when `localStorage` fails. JAN registration also preserves previous product data if the associated JAN-name catalog cannot be saved.
+
+The prior baseline suite passed **51/51 tests** with `node --test tests/app.test.js` before this orientation change. The new orientation logic was separately exercised with the focused local check above; a full repository regression run should be repeated before merge/release review.
 
 ## Known uncertainty / human validation needed
 
-The remaining Ver.1 uncertainty is primarily **real-device barcode scan reliability and speed on iPhone Safari**. Automated tests can cover logic and simulated camera behavior but cannot guarantee real-world focus, reflections, curved packaging, camera hardware, or Safari behavior.
+The main remaining Ver.1 uncertainty is **real-device barcode scan reliability and speed on iPhone Safari after the orientation improvement**. Automated tests cannot guarantee focus, reflections, curved packaging, camera hardware, or Safari behavior.
 
-The next validation should be one bundled real-device session covering:
+The next device validation should use the updated build and cover:
 
-1. JAN-13 on multiple products;
-2. JAN-8 on multiple products;
-3. approximate time-to-read;
-4. one or two previously difficult barcodes;
+1. the previously failing JAN-13 `4954540122035`;
+2. at least one ordinary JAN-13;
+3. at least one JAN-8;
+4. approximate time-to-read;
 5. confirmation that manual entry still works.
+
+The GS1/GTIN-14 sample `(01)04987138801791` is intentionally not part of the Ver.1 pass/fail gate because GS1 barcode support is not currently a product requirement.
 
 Record the result here after the user reports it.
 
@@ -80,7 +90,7 @@ Ver.1 is practical when all of the following are true:
 - known limitations are documented;
 - no paid infrastructure is required for the baseline product.
 
-Automated and static checks currently satisfy the non-device-specific Ver.1 criteria. Real-device iPhone Safari barcode validation is the remaining release-readiness gate before considering Ver.1 ready for merge/publication review.
+The current development branch contains the orientation reliability fix and remains unmerged/unpublished. Real-device validation of that updated build plus a full regression run are the remaining release-readiness gates before considering Ver.1 ready for merge/publication review.
 
 ## Agent reporting format
 

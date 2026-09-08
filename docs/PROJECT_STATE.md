@@ -18,17 +18,22 @@ Implemented core capabilities include:
 - deletion;
 - camera barcode scanning;
 - fallback in-app JAN decoding for environments such as iPhone Safari where `BarcodeDetector` may not be available;
+- storage-safe core changes: registration, confirmed/unconfirmed changes, and deletion update the in-memory/UI state only after browser storage succeeds; JAN registration rolls product storage back if catalog storage fails;
 - automated tests in `tests/app.test.js`.
 
 ## Most recent development work
 
-The latest merged work improved iPhone barcode scanning. The README notes multi-position/multi-angle analysis, frame confirmation to reduce false positives, and device-side processing without external image upload.
+Core persistence was hardened for practical Ver.1 use. Registration, confirmed/unconfirmed changes, and deletion now avoid showing a successful state when `localStorage` fails. JAN registration also preserves the previous product data if the associated JAN-name catalog cannot be saved.
+
+Regression coverage was added for those failure paths. The current baseline suite passes **51/51 tests** with `node --test tests/app.test.js`, including adjacent registration/edit/confirm/delete flows and simulated JAN-8/JAN-13 camera decoding.
+
+The previously merged iPhone barcode-scanning implementation remains unchanged by this persistence work.
 
 ## Known uncertainty / human validation needed
 
-The remaining uncertainty is primarily **real-device barcode scan reliability and speed on iPhone Safari**. Automated tests can cover logic and simulated camera behavior but cannot guarantee real-world focus, reflections, curved packaging, camera hardware, or Safari behavior.
+The remaining Ver.1 uncertainty is primarily **real-device barcode scan reliability and speed on iPhone Safari**. Automated tests can cover logic and simulated camera behavior but cannot guarantee real-world focus, reflections, curved packaging, camera hardware, or Safari behavior.
 
-When development work reaches this point, do not repeatedly ask the user for screenshots. First complete all code/test analysis that can be done autonomously, then request one concise device test covering:
+The next validation should be one bundled real-device session covering:
 
 1. JAN-13 on multiple products;
 2. JAN-8 on multiple products;
@@ -74,6 +79,8 @@ Ver.1 is practical when all of the following are true:
 - automated regression tests pass;
 - known limitations are documented;
 - no paid infrastructure is required for the baseline product.
+
+Automated and static checks currently satisfy the non-device-specific Ver.1 criteria. Real-device iPhone Safari barcode validation is the remaining release-readiness gate before considering Ver.1 ready for merge/publication review.
 
 ## Agent reporting format
 

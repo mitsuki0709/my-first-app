@@ -192,9 +192,13 @@
     return { products: products.map((product) => product.id === id ? updated : product), catalog: nextCatalog };
   }
 
+  function persistProducts(storage, nextProducts) {
+    storage.setItem(STORAGE_KEY, JSON.stringify(nextProducts));
+  }
+
   function persistEdit(storage, next) {
     const previousProducts = storage.getItem(STORAGE_KEY);
-    storage.setItem(STORAGE_KEY, JSON.stringify(next.products));
+    persistProducts(storage, next.products);
     try {
       storage.setItem(CATALOG_KEY, JSON.stringify(next.catalog));
     } catch (error) {
@@ -209,7 +213,7 @@
   }
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { parseLocalDate, daysUntil, getStatus, sortProducts, normalizeJan, isValidJan, decodeModules, decodeEanLine, editProduct, persistEdit, scannerCrop, scanBarcodeImage };
+    module.exports = { parseLocalDate, daysUntil, getStatus, sortProducts, normalizeJan, isValidJan, decodeModules, decodeEanLine, editProduct, persistProducts, persistEdit, scannerCrop, scanBarcodeImage };
   }
 
   if (typeof document === "undefined") return;
@@ -256,10 +260,6 @@
     } catch {
       return [];
     }
-  }
-
-  function saveProducts() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
   }
 
   function formatDate(dateString) {
@@ -461,16 +461,28 @@
   scannerDialog.addEventListener("cancel", (event) => { event.preventDefault(); stopScanner(); });
 
   function toggleChecked(id) {
-    products = products.map((product) => product.id === id ? { ...product, checked: !product.checked } : product);
-    saveProducts();
+    const nextProducts = products.map((product) => product.id === id ? { ...product, checked: !product.checked } : product);
+    try {
+      persistProducts(localStorage, nextProducts);
+    } catch {
+      message.textContent = "確認状態を保存できませんでした。表示は変更していません。空き容量やブラウザーの設定を確認して再試行してください。";
+      return;
+    }
+    products = nextProducts;
     render();
   }
 
   function removeProduct(id) {
     const product = products.find((item) => item.id === id);
     if (!product || !window.confirm(`「${product.name}」を削除しますか？`)) return;
-    products = products.filter((item) => item.id !== id);
-    saveProducts();
+    const nextProducts = products.filter((item) => item.id !== id);
+    try {
+      persistProducts(localStorage, nextProducts);
+    } catch {
+      message.textContent = "削除を保存できませんでした。商品は削除していません。空き容量やブラウザーの設定を確認して再試行してください。";
+      return;
+    }
+    products = nextProducts;
     render();
   }
 
@@ -484,12 +496,17 @@
       janInput.focus();
       return;
     }
-    products.push({ id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, name, expiry: dateInput.value, checked: false, jan });
-    if (jan) {
-      catalog[jan] = name;
-      localStorage.setItem(CATALOG_KEY, JSON.stringify(catalog));
+    const nextProducts = [...products, { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, name, expiry: dateInput.value, checked: false, jan }];
+    const nextCatalog = jan ? { ...catalog, [jan]: name } : catalog;
+    try {
+      if (jan) persistEdit(localStorage, { products: nextProducts, catalog: nextCatalog });
+      else persistProducts(localStorage, nextProducts);
+    } catch (error) {
+      message.textContent = error.message.startsWith("保存状態") ? error.message : "商品を保存できませんでした。入力内容は残っています。空き容量やブラウザーの設定を確認して再試行してください。";
+      return;
     }
-    saveProducts();
+    products = nextProducts;
+    catalog = nextCatalog;
     render();
     form.reset();
     message.textContent = `「${name}」を登録しました。`;

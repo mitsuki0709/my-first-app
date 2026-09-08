@@ -50,7 +50,6 @@
     return isValidJan(jan) ? jan : null;
   }
 
-  // Decode an EAN/JAN scan line without a browser API. This is the free Safari fallback.
   function decodeEanLine(pixels) {
     const tryDirection = (line) => {
       const runs = [];
@@ -83,7 +82,6 @@
     return tryDirection(pixels) || tryDirection([...pixels].reverse());
   }
 
-  // Match the centered object-fit: cover preview and include margin around the guide.
   function scannerCrop(videoWidth, videoHeight, viewWidth, viewHeight) {
     const scale = Math.max(viewWidth / videoWidth, viewHeight / videoHeight);
     const visibleWidth = viewWidth / scale;
@@ -96,50 +94,55 @@
     };
   }
 
-  // One generator step analyses one position/angle. The UI yields between short batches.
   function* scanBarcodeImage(image, decode = decodeEanLine) {
     const { width, height, data } = image;
     const positions = [0.5];
     for (let i = 1; i <= 10; i += 1) positions.push(0.5 - i * 0.04, 0.5 + i * 0.04);
-    for (const slope of [0, -0.08, 0.08, -0.16, 0.16]) {
-      for (const position of positions) {
-        const center = position * (height - 1);
-        if (center - Math.abs(slope) * width / 2 < 2 || center + Math.abs(slope) * width / 2 >= height - 2) continue;
-        for (const radius of [1, 0]) {
-          const light = new Float32Array(width);
-          const histogram = new Uint32Array(256);
-          for (let x = 0; x < width; x += 1) {
-            const y = Math.round(center + (x - width / 2) * slope);
-            let sum = 0;
-            for (let dy = -radius; dy <= radius; dy += 1) {
-              const offset = ((y + dy) * width + x) * 4;
-              sum += (data[offset] * 299 + data[offset + 1] * 587 + data[offset + 2] * 114) / 1000;
+    for (const vertical of [false, true]) {
+      const span = vertical ? height : width;
+      const cross = vertical ? width : height;
+      for (const slope of [0, -0.08, 0.08, -0.16, 0.16]) {
+        for (const position of positions) {
+          const center = position * (cross - 1);
+          if (center - Math.abs(slope) * span / 2 < 2 || center + Math.abs(slope) * span / 2 >= cross - 2) continue;
+          for (const radius of [1, 0]) {
+            const light = new Float32Array(span);
+            const histogram = new Uint32Array(256);
+            for (let point = 0; point < span; point += 1) {
+              const crossPosition = Math.round(center + (point - span / 2) * slope);
+              let sum = 0;
+              for (let delta = -radius; delta <= radius; delta += 1) {
+                const x = vertical ? crossPosition + delta : point;
+                const y = vertical ? point : crossPosition + delta;
+                const offset = (y * width + x) * 4;
+                sum += (data[offset] * 299 + data[offset + 1] * 587 + data[offset + 2] * 114) / 1000;
+              }
+              light[point] = sum / (radius * 2 + 1);
+              histogram[Math.round(light[point])] += 1;
             }
-            light[x] = sum / (radius * 2 + 1);
-            histogram[Math.round(light[x])] += 1;
-          }
-          let cumulative = 0, low = -1, high = 255;
-          for (let value = 0; value < 256; value += 1) {
-            cumulative += histogram[value];
-            if (low < 0 && cumulative >= width * 0.05) low = value;
-            if (cumulative >= width * 0.95) { high = value; break; }
-          }
-          if (high - low < 25) continue;
-          const prefix = new Float64Array(width + 1);
-          for (let x = 0; x < width; x += 1) prefix[x + 1] = prefix[x] + light[x];
-          const windowSize = Math.max(16, Math.round(width / 16));
-          for (const fraction of [0.5, 0.38, 0.62, null]) {
-            const bits = new Uint8Array(width);
-            for (let x = 0; x < width; x += 1) {
-              const left = Math.max(0, x - windowSize), right = Math.min(width, x + windowSize + 1);
-              const threshold = fraction === null ? (prefix[right] - prefix[left]) / (right - left) - 5 : low + (high - low) * fraction;
-              bits[x] = light[x] < threshold ? 1 : 0;
+            let cumulative = 0, low = -1, high = 255;
+            for (let value = 0; value < 256; value += 1) {
+              cumulative += histogram[value];
+              if (low < 0 && cumulative >= span * 0.05) low = value;
+              if (cumulative >= span * 0.95) { high = value; break; }
             }
-            const jan = decode(bits);
-            if (jan) return jan;
+            if (high - low < 25) continue;
+            const prefix = new Float64Array(span + 1);
+            for (let point = 0; point < span; point += 1) prefix[point + 1] = prefix[point] + light[point];
+            const windowSize = Math.max(16, Math.round(span / 16));
+            for (const fraction of [0.5, 0.38, 0.62, null]) {
+              const bits = new Uint8Array(span);
+              for (let point = 0; point < span; point += 1) {
+                const left = Math.max(0, point - windowSize), right = Math.min(span, point + windowSize + 1);
+                const threshold = fraction === null ? (prefix[right] - prefix[left]) / (right - left) - 5 : low + (high - low) * fraction;
+                bits[point] = light[point] < threshold ? 1 : 0;
+              }
+              const jan = decode(bits);
+              if (jan) return jan;
+            }
           }
+          yield null;
         }
-        yield null;
       }
     }
     return null;
@@ -181,20 +184,22 @@
     if (jan && !isValidJan(jan)) throw new Error("JANコードを確認してください（正しい8桁または13桁）。");
     const updated = { ...original, name, expiry, jan };
     const nextCatalog = { ...catalog };
-    // Retain the old JAN's name only when another registered product uses it.
     if (original.jan && original.jan !== jan) {
       const remaining = products.find((product) => product.id !== id && product.jan === original.jan);
       if (remaining) nextCatalog[original.jan] = remaining.name;
       else delete nextCatalog[original.jan];
     }
-    // Date-only edits must not replace a name remembered by another product.
     if (jan && (original.jan !== jan || original.name !== name)) nextCatalog[jan] = name;
     return { products: products.map((product) => product.id === id ? updated : product), catalog: nextCatalog };
   }
 
+  function persistProducts(storage, nextProducts) {
+    storage.setItem(STORAGE_KEY, JSON.stringify(nextProducts));
+  }
+
   function persistEdit(storage, next) {
     const previousProducts = storage.getItem(STORAGE_KEY);
-    storage.setItem(STORAGE_KEY, JSON.stringify(next.products));
+    persistProducts(storage, next.products);
     try {
       storage.setItem(CATALOG_KEY, JSON.stringify(next.catalog));
     } catch (error) {
@@ -209,7 +214,7 @@
   }
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { parseLocalDate, daysUntil, getStatus, sortProducts, normalizeJan, isValidJan, decodeModules, decodeEanLine, editProduct, persistEdit, scannerCrop, scanBarcodeImage };
+    module.exports = { parseLocalDate, daysUntil, getStatus, sortProducts, normalizeJan, isValidJan, decodeModules, decodeEanLine, editProduct, persistProducts, persistEdit, scannerCrop, scanBarcodeImage };
   }
 
   if (typeof document === "undefined") return;
@@ -256,10 +261,6 @@
     } catch {
       return [];
     }
-  }
-
-  function saveProducts() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
   }
 
   function formatDate(dateString) {
@@ -382,7 +383,7 @@
           if (capabilities[key] && capabilities[key].includes("continuous")) advanced[key] = "continuous";
         }
         if (Object.keys(advanced).length) await track.applyConstraints({ advanced: [advanced] });
-      } catch { /* Optional camera controls must never block scanning. */ }
+      } catch {}
       if (!active()) return;
       let detector = null;
       if ("BarcodeDetector" in window) {
@@ -393,7 +394,7 @@
         } catch { detector = null; }
       }
       if (!active()) return;
-      scannerMessage.textContent = "左右の白い余白ごと緑枠に入れ、1〜2秒静止してください。ピントが合わなければ少し離してください。";
+      scannerMessage.textContent = "JAN全体と白い余白を緑枠に入れ、1〜2秒静止してください。縦向き・横向きのどちらでも読み取れます。";
       const context = scanCanvas.getContext("2d", { willReadFrequently: true });
       let iterator = null, lastJan = null, lastSeen = 0;
       const started = Date.now();
@@ -429,13 +430,12 @@
           }
           if (jan) {
             const now = Date.now();
-            // Require the same checksum-valid JAN in two separately captured frames.
             if (jan === lastJan && now - lastSeen < 2500) { stopScanner(); applyJan(jan, true); return; }
             lastJan = jan;
             lastSeen = now;
             scannerMessage.textContent = "読み取り候補を確認中です。そのまま少し静止してください。";
           } else if (Date.now() - started > 6000 && Date.now() - lastSeen > 2500) {
-            scannerMessage.textContent = "反射を避け、バーを横向きにして少し近づける・離すと読みやすくなります。難しい場合はキャンセルして数字で入力できます。";
+            scannerMessage.textContent = "反射を避け、少し近づける・離す、またはJANを90度回して試してください。難しい場合は数字で入力できます。";
           }
         } catch {
           iterator = null;
@@ -461,16 +461,28 @@
   scannerDialog.addEventListener("cancel", (event) => { event.preventDefault(); stopScanner(); });
 
   function toggleChecked(id) {
-    products = products.map((product) => product.id === id ? { ...product, checked: !product.checked } : product);
-    saveProducts();
+    const nextProducts = products.map((product) => product.id === id ? { ...product, checked: !product.checked } : product);
+    try {
+      persistProducts(localStorage, nextProducts);
+    } catch {
+      message.textContent = "確認状態を保存できませんでした。表示は変更していません。空き容量やブラウザーの設定を確認して再試行してください。";
+      return;
+    }
+    products = nextProducts;
     render();
   }
 
   function removeProduct(id) {
     const product = products.find((item) => item.id === id);
     if (!product || !window.confirm(`「${product.name}」を削除しますか？`)) return;
-    products = products.filter((item) => item.id !== id);
-    saveProducts();
+    const nextProducts = products.filter((item) => item.id !== id);
+    try {
+      persistProducts(localStorage, nextProducts);
+    } catch {
+      message.textContent = "削除を保存できませんでした。商品は削除していません。空き容量やブラウザーの設定を確認して再試行してください。";
+      return;
+    }
+    products = nextProducts;
     render();
   }
 
@@ -484,12 +496,17 @@
       janInput.focus();
       return;
     }
-    products.push({ id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, name, expiry: dateInput.value, checked: false, jan });
-    if (jan) {
-      catalog[jan] = name;
-      localStorage.setItem(CATALOG_KEY, JSON.stringify(catalog));
+    const nextProducts = [...products, { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, name, expiry: dateInput.value, checked: false, jan }];
+    const nextCatalog = jan ? { ...catalog, [jan]: name } : catalog;
+    try {
+      if (jan) persistEdit(localStorage, { products: nextProducts, catalog: nextCatalog });
+      else persistProducts(localStorage, nextProducts);
+    } catch (error) {
+      message.textContent = error.message.startsWith("保存状態") ? error.message : "商品を保存できませんでした。入力内容は残っています。空き容量やブラウザーの設定を確認して再試行してください。";
+      return;
     }
-    saveProducts();
+    products = nextProducts;
+    catalog = nextCatalog;
     render();
     form.reset();
     message.textContent = `「${name}」を登録しました。`;

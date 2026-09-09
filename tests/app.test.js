@@ -295,11 +295,11 @@ function barcodeImage(bits, options = {}) {
 }
 function decodeImage(image) {
   const iterator = scanBarcodeImage(image);
-  for (let calls = 0; calls <= 105; calls += 1) {
+  for (let calls = 0; calls <= 220; calls += 1) {
     const result = iterator.next();
     if (result.done) return result.value;
   }
-  assert.fail('Scanner exceeded bounded search count');
+  assert.fail('Scanner exceeded bounded two-orientation search count');
 }
 for (const [label, options] of [
   ['中央', {}], ['上方・左への位置ずれ', { center: 85, left: 35 }],

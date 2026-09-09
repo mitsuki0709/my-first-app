@@ -4,6 +4,8 @@
 
 Reach a stable, practical **Ver.1** while minimizing repeated user/Codex back-and-forth. The development agent should independently assess the repository, choose the next safe task, implement it, validate it, and continue until a genuine user decision or real-device check is required.
 
+Practical Ver.1 is ready. The next product opportunity has been researched separately: a small-food-retailer expiry-check pilot is the leading hypothesis and is currently `VALIDATE — validation incomplete; development transition not approved`. It must pass the customer-evidence gate in `docs/PROJECT_BRIEF.md` and receive user approval before the product target is changed, the documents move to `READY_FOR_MVP`, or implementation begins.
+
 ## Current product state
 
 Implemented core capabilities include:
@@ -36,6 +38,8 @@ Core persistence was previously hardened for practical Ver.1 use. Registration, 
 
 The baseline suite passed **51/51 tests** with `node --test tests/app.test.js` before the orientation change, and focused orientation coverage was added for normal and 90-degree-rotated JAN layouts. The orientation build has since been merged to `main` and published through the existing GitHub Pages deployment.
 
+The baseline test helper now allows the bounded work required to exhaust both scan orientations. This restores the negative-image regression test without changing the scanner's production search behavior.
+
 ## Known limitations
 
 - Strong curvature, dents, scratches, folds, glare, blur, or otherwise physically distorted barcodes may not scan reliably. Manual JAN entry is the fallback for these cases.
@@ -64,6 +68,8 @@ When no explicit user task is supplied, choose the next task by this order:
 8. cosmetic enhancement.
 
 Do not invent large new features just to stay busy.
+
+Product discovery follows `.agents/skills/planning-research-agent/SKILL.md` and is recorded in `docs/RESEARCH_STATE.md`, `docs/OPPORTUNITY_BACKLOG.md`, `docs/REJECTED_IDEAS.md`, and `docs/PROJECT_BRIEF.md`. A detailed brief or high score does not authorize development; status, validation evidence, and the approval requirements in `AGENTS.md` control the transition.
 
 ## Definition of practical Ver.1
 

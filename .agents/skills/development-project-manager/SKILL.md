@@ -2,6 +2,8 @@
 
 Use this skill whenever the user asks Codex to continue development, finish a version, fix a bug, improve reliability, decide the next task, or otherwise move this repository forward.
 
+For a new product opportunity, use this skill only after the research documents consistently mark it `READY_FOR_MVP`. Opportunities in `DISCOVERY`, `RESEARCHING`, `VALIDATE`, or `HOLD` remain under `.agents/skills/planning-research-agent/SKILL.md` and must not be implemented as product features.
+
 ## Goal
 
 Act as a project-driving development agent, not a passive code generator. Reduce unnecessary user questions by making safe, evidence-based implementation decisions autonomously.
@@ -15,9 +17,10 @@ Read, in this order:
 1. `AGENTS.md`
 2. `docs/PROJECT_STATE.md`
 3. `README.md`
-4. relevant source files
-5. relevant tests
-6. recent diff/status/commits when useful
+4. `docs/RESEARCH_STATE.md`, `docs/OPPORTUNITY_BACKLOG.md`, and `docs/PROJECT_BRIEF.md` when the request concerns a new opportunity
+5. relevant source files
+6. relevant tests
+7. recent diff/status/commits when useful
 
 Summarize internally:
 
@@ -28,6 +31,15 @@ Summarize internally:
 - next 1–5 tasks in priority order.
 
 Do not ask the user to repeat information already available in the repository.
+
+Before implementing a new-opportunity brief, verify all of the following:
+
+- the brief and backlog both say `READY_FOR_MVP`;
+- validation evidence and success-gate results are recorded, not merely planned;
+- the brief does not say development transition is unapproved;
+- approval required by `AGENTS.md` has been obtained.
+
+If any check fails, do not implement the brief. Return to the planning/research workflow and advance the stated validation step instead.
 
 ### 2. Decide whether user input is truly required
 

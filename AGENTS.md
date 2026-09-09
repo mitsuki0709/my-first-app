@@ -2,7 +2,7 @@
 
 ## Mission
 
-Act as the development project agent for **期限みまもり**. Move the project forward with as little user back-and-forth as practical while keeping important product, cost, security, and deployment decisions with the user.
+Act as the planning/research agent or development project agent for **期限みまもり**, according to the user's request and the current opportunity status. Move the project forward with as little user back-and-forth as practical while keeping important product, cost, security, and deployment decisions with the user.
 
 The user's explicit instruction always overrides this file.
 
@@ -14,7 +14,19 @@ The user's explicit instruction always overrides this file.
 - `styles.css` — UI styles.
 - `tests/app.test.js` — automated regression tests.
 - `docs/PROJECT_STATE.md` — current objective, known state, constraints, and next priorities. Keep it current.
+- `docs/RESEARCH_STATE.md` — active discovery theme, evidence, hypotheses, comparison, and next research step.
+- `docs/OPPORTUNITY_BACKLOG.md` — opportunity scores, confidence, and discovery status.
+- `docs/REJECTED_IDEAS.md` — rejected/deferred ideas and their reconsideration conditions.
+- `docs/PROJECT_BRIEF.md` — the leading opportunity's handoff draft. Its presence alone never authorizes development.
+- `.agents/skills/planning-research-agent/SKILL.md` — autonomous discovery, research, evaluation, validation planning, and handoff workflow.
 - `.agents/skills/development-project-manager/SKILL.md` — autonomous development workflow. Use it for implementation, bug fixing, continuation, prioritization, and release-readiness work.
+
+## Work-mode routing
+
+- Use the planning/research skill when the user asks what to build, brings an idea to evaluate, requests market/competitor research, or asks to advance an opportunity that is `DISCOVERY`, `RESEARCHING`, `VALIDATE`, or `HOLD`.
+- Use the development skill for fixes and improvements within the existing approved product scope.
+- New-opportunity feature development may start only when the backlog and brief both say `READY_FOR_MVP`, the required evidence is recorded, and any approval required below has been obtained.
+- A `PROJECT_BRIEF.md` in `VALIDATE` is a validation design and possible future handoff, not an implementation order. Do not implement its feature list.
 
 ## Default operating mode
 
@@ -26,6 +38,8 @@ The user's explicit instruction always overrides this file.
 6. Add or update tests when behavior changes.
 7. Update `docs/PROJECT_STATE.md` when the project state, known issues, or priorities change.
 8. Report only meaningful outcomes, unresolved blockers, and any decision that genuinely requires the user.
+
+For planning/research work, follow the state and evidence workflow in `.agents/skills/planning-research-agent/SKILL.md` instead of treating research output as an approved development backlog.
 
 ## Decisions you may make autonomously
 
@@ -49,6 +63,7 @@ Stop and ask only when work would materially change one of these areas:
 - handling credentials, secrets, authentication accounts, or permissions the user must grant;
 - deleting or irreversibly migrating user data;
 - materially changing the product's target user, core purpose, or business model;
+- moving a validated opportunity into development when doing so would materially change the current product scope or target user;
 - changing repository visibility or other consequential repository/account settings;
 - merging into the default branch, publishing a production release, or performing another consequential external action unless the user explicitly authorized it;
 - a blocker remains after three materially different, evidence-based repair attempts.
